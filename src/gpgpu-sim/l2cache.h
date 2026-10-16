@@ -911,6 +911,8 @@ class memory_sub_partition {
 
   friend class L2interface;
 
+  bool l2_to_dram_full() const;
+  void enqueue_l2_to_dram(mem_fetch *mf, bool bypass);
   unsigned l2_partition_extra_latency(const mem_fetch *mf) const;
   std::vector<mem_fetch *> breakdown_request_to_sector_requests(mem_fetch *mf);
   void push_rop_delay(mem_fetch *mf, unsigned long long ready_cycle,
@@ -951,11 +953,11 @@ class L2interface : public mem_fetch_interface {
   virtual ~L2interface() {}
   virtual bool full(unsigned size, bool write) const {
     // assume read and write packets all same size
-    return m_unit->m_L2_dram_queue->full();
+    return m_unit->l2_to_dram_full();
   }
   virtual void push(mem_fetch *mf) {
     mf->set_status(IN_PARTITION_L2_TO_DRAM_QUEUE, 0 /*FIXME*/);
-    m_unit->m_L2_dram_queue->push(mf);
+    m_unit->enqueue_l2_to_dram(mf, false);
   }
 
  private:
