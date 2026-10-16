@@ -50,6 +50,7 @@
 #include "l2cache_trace.h"
 #include "mem_fetch.h"
 #include "mem_latency_stat.h"
+#include "memweave_llc_trace.h"
 #include "shader.h"
 
 const char *mem_sub_partition_full_stat_str(
@@ -596,6 +597,7 @@ memory_sub_partition::memory_sub_partition(unsigned sub_partition_id,
           l2_port_model_from_config(config->l2_multi_issue_port_model)) {
   m_mem_stats = stats;
   m_gpu = gpu;
+  memweave_llc_trace::initialize();
   m_memcpy_cycle_offset = 0;
   m_rop_pipeline_capacity = 0;
 
@@ -816,8 +818,20 @@ void memory_sub_partition::service_dram_to_l2_multi_issue() {
   }
 }
 
+bool memory_sub_partition::l2_to_dram_full() const {
+  const bool full = m_L2_dram_queue->full();
+  if (full) memweave_llc_trace::observe_queue_full();
+  return full;
+}
+
+void memory_sub_partition::enqueue_l2_to_dram(mem_fetch *mf, bool bypass) {
+  m_L2_dram_queue->push(mf);
+  memweave_llc_trace::record_enqueue(
+      mf, m_id, m_gpu->gpu_tot_sim_cycle + m_gpu->gpu_sim_cycle, bypass);
+}
+
 void memory_sub_partition::service_l2_requests_legacy() {
-  if (m_L2_dram_queue->full() || m_icnt_L2_queue->empty()) return;
+  if (l2_to_dram_full() || m_icnt_L2_queue->empty()) return;
 
   mem_fetch *mf = m_icnt_L2_queue->top();
   if (!m_config->m_L2_config.disabled() &&
@@ -841,7 +855,7 @@ void memory_sub_partition::service_l2_requests_legacy() {
   // L2 is disabled or this is a non-texture access to a texture-only L2.
   mf->set_status(IN_PARTITION_L2_TO_DRAM_QUEUE,
                  m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
-  m_L2_dram_queue->push(mf);
+  enqueue_l2_to_dram(mf, true);
   m_icnt_L2_queue->pop();
 }
 
@@ -863,7 +877,7 @@ void memory_sub_partition::service_l2_requests_multi_issue() {
     }
   }
 
-  while (continue_l2_service && !m_L2_dram_queue->full() &&
+  while (continue_l2_service && !l2_to_dram_full() &&
          !m_icnt_L2_queue->empty()) {
     mem_fetch *mf = m_icnt_L2_queue->top();
     if (!m_config->m_L2_config.disabled() &&
@@ -943,7 +957,7 @@ void memory_sub_partition::service_l2_requests_multi_issue() {
     } else {
       mf->set_status(IN_PARTITION_L2_TO_DRAM_QUEUE,
                      m_gpu->gpu_sim_cycle + m_gpu->gpu_tot_sim_cycle);
-      m_L2_dram_queue->push(mf);
+      enqueue_l2_to_dram(mf, true);
       m_icnt_L2_queue->pop();
       continue_l2_service = false;
     }
